@@ -1,0 +1,30 @@
+#!/bin/bash
+# restartgpu — Reinicia el servicio y aplica la config nueva
+# Uso: restartgpu
+
+SERVICE="set-fan-curve"
+
+echo "─── restartgpu ──────────────────────────────────────────────────"
+echo "Restarting $SERVICE..."
+
+if ! systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+    echo "  Service not running. Starting..."
+    sudo systemctl start "$SERVICE"
+else
+    sudo systemctl restart "$SERVICE"
+fi
+
+# Verificar
+sleep 2
+if systemctl is-active --quiet "$SERVICE"; then
+    echo "[ok] Service restarted successfully."
+    echo "  Config: $HOME/set-fan-config"
+    echo "  Logs:   journalctl -u $SERVICE -f"
+    echo ""
+    echo "Current status:"
+    systemctl status "$SERVICE" --no-pager -n 5
+else
+    echo "[error] Service failed to start."
+    echo "Check logs: sudo journalctl -u $SERVICE -n 30"
+    exit 1
+fi

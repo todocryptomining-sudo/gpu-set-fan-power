@@ -1,0 +1,97 @@
+# set-fan-config — GPU Fan Curve Controller v1.5
+# Location: ~/set-fan-config  (read by the daemon via $HOME)
+# Lines starting with # are comments. Keys use KEY=value (INI-style).
+#
+# VRAM and Hotspot temperatures are read DIRECTLY from GPU PCI registers
+# (same technique as gddr6.c / nvml_direct_access.c), NOT from NVML.
+# On RTX 3090 with recent drivers NVML reports the core temp for the
+# "memory" sensor, so PCI access is the only reliable GDDR6X reading.
+#
+#   VRAM:    BAR0 + 0x0000E2A8   temp = (raw & 0xFFF) / 0x20
+#   Hotspot: BAR0 + 0x0002046C   temp = (raw >> 8) & 0xFF
+#
+# The service runs as root and needs access to /dev/mem. It publishes the
+# readings to /run/set-fan-curve/temps so `vergpu` works without root.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temperature curve
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Target maximum temperature (50-95 °C).
+#   below (max_temp - 40) °C ................ min_speed %
+#   between ramp start and max_temp .......... linear ramp to 100 %
+#   at or above max_temp ..................... 100 %
+max_temp=85
+
+# Minimum fan speed (0-80 %). Keep >= 30 % to avoid stagnant air.
+# This only applies below (max_temp - 40) °C; the curve ramps up above that.
+# For a fixed-speed test use the `setfan` command instead (e.g. setfan 70).
+min_speed=40
+
+# Hard safety lock temperature (must be > max_temp, <= 100 °C).
+# When the effective temperature reaches this value, fans go to 100 %
+# and stay latched until the temperature drops 5 °C below it.
+# The effective temperature is core + the sensors enabled below
+# (unless safety_all_sensors=1).
+critical_temp=93
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Direct PCI temperature reads
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Use real VRAM temperature for the curve (1 = yes, 0 = no).
+# Recommended: 1 on RTX 3090 / GDDR6X.
+use_vram_temp=1
+
+# Use GPU die Hotspot temperature for the curve (1 = yes, 0 = no).
+# Enable only if the value looks sane on your card.
+use_hotspot_temp=0
+
+# Safety lock sensor set (1 = always use core + VRAM + hotspot; 0 = use the
+# same sensors enabled above for the curve).
+# 0 is recommended: with 1, a hot hotspot keeps the fans at 100 % even if
+# use_hotspot_temp=0. Set 1 only if you want maximum protection.
+safety_all_sensors=0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Power management
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Power limit in watts (0 = disabled / GPU default).
+# The daemon re-asserts it every 10 seconds (power-limit dominance).
+# Example: 250 for an RTX 3090 (default ~350 W).
+power_limit=0
+
+# Persistence mode (0 = disabled, 1 = enabled).
+persistence=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example profiles
+# ─────────────────────────────────────────────────────────────────────────────
+
+# RTX 3090 compute / mining (stable and cool):
+#   max_temp=72
+#   min_speed=55
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=260
+#   persistence=1
+
+# Silent desktop GPU:
+#   max_temp=80
+#   min_speed=25
+#   critical_temp=95
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=180
+#   persistence=0
+
+# Maximum performance:
+#   max_temp=70
+#   min_speed=70
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=1
+#   power_limit=350
+#   persistence=1

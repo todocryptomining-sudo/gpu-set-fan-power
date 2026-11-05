@@ -1,0 +1,21 @@
+# Normalizar finales de línea: los scripts deben ser LF para Linux
+* text=auto
+
+*.sh text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.md text eol=lf
+*.ini text eol=lf
+*.example text eol=lf
+editargpu text eol=lf
+restartgpu text eol=lf
+gpustatus text eol=lf
+gpusave text eol=lf
+setfan text eol=lf
+gpuhelp text eol=lf
+updategpu text eol=lf
+
+*.tar.gz binary
+*.png binary
+*.jpg binary

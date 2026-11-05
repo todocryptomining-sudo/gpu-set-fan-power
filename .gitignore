@@ -1,0 +1,19 @@
+# Binarios y objetos de compilación
+*.o
+*.obj
+*.out
+set_fan_curve
+vergpu
+
+# Configuración y logs locales
+set-fan-config
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp

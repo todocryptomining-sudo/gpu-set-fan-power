@@ -1,0 +1,289 @@
+#!/bin/bash
+# setfan — prueba manual de ventiladores para GPU Fan Curve Controller v1.5
+# ─────────────────────────────────────────────────────────────────────────────
+# Uso:
+#   setfan 70      fija los ventiladores al 70 % hasta cancelar
+#   setfan max     fija los ventiladores al 100 %
+#   setfan auto    cancela el modo manual y devuelve el control a la curva
+#   setfan status  muestra si hay una prueba activa
+#
+# Cómo funciona:
+#   Escribe "/run/set-fan-curve/manual" con "<velocidad> <pid>". El daemon lee
+#   ese archivo cada 2 s y mantiene los ventiladores a esa velocidad mientras
+#   el proceso setfan siga vivo. Al salir (Ctrl+C, cierre de SSH, kill) el
+#   archivo se borra y la curva vuelve a tomar el control automáticamente.
+#
+#   El bloqueo de seguridad (critical_temp) SIEMPRE tiene prioridad: si la
+#   temperatura llega al límite, el daemon fuerza 100 % aunque la prueba esté
+#   fijada por debajo.
+# ─────────────────────────────────────────────────────────────────────────────
+set -u
+
+MANUAL_FILE="/run/set-fan-curve/manual"
+TEMPS_FILE="/run/set-fan-curve/temps"
+CONTROL_DIR="/run/set-fan-curve"
+INTERVAL="${SETFAN_INTERVAL:-2}"
+
+# Contadores para el resumen final
+CORE_MIN=999; CORE_MAX=0; CORE_SUM=0; CORE_N=0
+VRAM_MIN=999; VRAM_MAX=0; VRAM_SUM=0; VRAM_N=0
+HOT_MIN=999;  HOT_MAX=0;  HOT_SUM=0;  HOT_N=0
+CLEANED=0
+
+usage() {
+    cat <<'EOF'
+Uso: setfan <porcentaje> | max | auto | status
+
+  setfan 70      Fija los ventiladores al 70 % hasta que lo canceles
+  setfan max     Fija los ventiladores al 100 %
+  setfan auto    Cancela el modo manual y vuelve a la curva
+  setfan status  Muestra si hay una prueba activa
+
+Durante la prueba se muestran core/VRAM/hotspot, potencia y velocidad real.
+Ctrl+C cancela la prueba y muestra un resumen de temperaturas.
+El bloqueo de seguridad (critical_temp) siempre tiene prioridad.
+EOF
+}
+
+run_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+# Imprime el contenido del archivo de control. Devuelve 1 si no existe.
+read_manual() {
+    [ -r "$MANUAL_FILE" ] || return 1
+    cat "$MANUAL_FILE" 2>/dev/null
+}
+
+# Imprime "vram hotspot" para un bus PCI (acepta 0000:01:00.0 o 00000000:01:00.0)
+lookup_pci_temps() {
+    local want="$1" bdf vram hot
+    want="${want: -12}"
+    [ -r "$TEMPS_FILE" ] || return 1
+    while read -r bdf vram hot; do
+        [ "${bdf: -12}" = "$want" ] && { echo "$vram $hot"; return 0; }
+    done < "$TEMPS_FILE"
+    return 1
+}
+
+# Borra el archivo solo si pertenece a este proceso. Idempotente.
+cleanup_file() {
+    [ "$CLEANED" -eq 1 ] && return 0
+    CLEANED=1
+
+    local content speed pid
+    content=$(read_manual 2>/dev/null) || return 0
+    read -r speed pid <<< "$content"
+    [ "${pid:-}" = "$$" ] || return 0
+
+    if [ "$(id -u)" -eq 0 ]; then
+        rm -f "$MANUAL_FILE" 2>/dev/null || true
+    else
+        sudo -n rm -f "$MANUAL_FILE" 2>/dev/null || {
+            echo "[setfan] No se pudo borrar $MANUAL_FILE sin contraseña."
+            echo "         El daemon lo borrará al detectar que este proceso terminó."
+            return 0
+        }
+    fi
+    echo "[setfan] Modo manual cancelado; la curva vuelve a controlar los ventiladores."
+}
+
+print_summary() {
+    [ "$CORE_N" -gt 0 ] || return 0
+    echo
+    echo "─────────────── Resumen de la prueba ───────────────"
+    printf '  Core    : min %3d °C   max %3d °C   media %3d °C\n' \
+        "$CORE_MIN" "$CORE_MAX" "$((CORE_SUM / CORE_N))"
+    if [ "$VRAM_N" -gt 0 ]; then
+        printf '  VRAM    : min %3d °C   max %3d °C   media %3d °C\n' \
+            "$VRAM_MIN" "$VRAM_MAX" "$((VRAM_SUM / VRAM_N))"
+    else
+        echo "  VRAM    : sin datos (¿use_vram_temp=0 o lectura PCI no disponible?)"
+    fi
+    if [ "$HOT_N" -gt 0 ]; then
+        printf '  Hotspot : min %3d °C   max %3d °C   media %3d °C\n' \
+            "$HOT_MIN" "$HOT_MAX" "$((HOT_SUM / HOT_N))"
+    else
+        echo "  Hotspot : sin datos (¿use_hotspot_temp=0 o lectura PCI no disponible?)"
+    fi
+    echo "  Muestras: $CORE_N (cada ${INTERVAL}s)"
+    echo "────────────────────────────────────────────────────"
+}
+
+on_signal() {
+    trap '' INT TERM HUP
+    echo
+    cleanup_file
+    print_summary
+    exit 0
+}
+
+show_status() {
+    local content speed pid state
+    if ! content=$(read_manual); then
+        echo "[setfan] Modo manual: inactivo (la curva controla los ventiladores)."
+        return 0
+    fi
+
+    read -r speed pid <<< "$content"
+    if [ -n "${pid:-}" ] && [ -d "/proc/$pid" ]; then
+        state="activo (PID $pid)"
+    else
+        state="archivo huérfano (el PID $pid ya no existe; el daemon lo borrará)"
+    fi
+
+    echo "[setfan] Prueba manual: ${speed:-?} % — $state"
+    echo "[setfan] Archivo:       $MANUAL_FILE"
+    echo "[setfan] Para cancelar: setfan auto"
+}
+
+cancel_manual() {
+    local content speed pid
+    if ! content=$(read_manual); then
+        echo "[setfan] No hay ninguna prueba manual activa."
+        return 0
+    fi
+
+    read -r speed pid <<< "$content"
+    run_root rm -f "$MANUAL_FILE" || {
+        echo "[setfan] Error: no se pudo cancelar el modo manual." >&2
+        return 1
+    }
+    echo "[setfan] Modo manual cancelado (estaba al ${speed:-?} %, PID ${pid:-?})."
+    echo "[setfan] La curva vuelve a controlar los ventiladores."
+}
+
+show_live() {
+    local speed="$1" out line idx bdf core fan power
+    local temps vram hot
+
+    echo "────────────────────────────────────────────────────────────────"
+    printf '[%s] Prueba manual fijada al %s %%\n' "$(date +%H:%M:%S)" "$speed"
+
+    if ! out=$(nvidia-smi \
+            --query-gpu=index,pci.bus_id,temperature.gpu,fan.speed,power.draw \
+            --format=csv,noheader,nounits 2>/dev/null); then
+        echo "  [!] nvidia-smi no responde: el driver o la GPU no están disponibles."
+        return 0
+    fi
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        line=$(printf '%s' "$line" | tr -d ' ')
+        IFS=',' read -r idx bdf core fan power <<< "$line"
+
+        vram="?"; hot="?"
+        if temps=$(lookup_pci_temps "$bdf"); then
+            read -r vram hot <<< "$temps"
+            [ "$vram" = "-1" ] && vram="?"
+            [ "$hot"  = "-1" ] && hot="?"
+        fi
+
+        printf '  GPU %s  Core %3s °C  VRAM %3s °C  Hotspot %3s °C  Fan %3s %%  %8s W\n' \
+            "$idx" "$core" "$vram" "$hot" "$fan" "$power"
+
+        # Estadísticas para el resumen final
+        if [[ "$core" =~ ^[0-9]+$ ]]; then
+            CORE_N=$((CORE_N + 1))
+            CORE_SUM=$((CORE_SUM + core))
+            [ "$core" -lt "$CORE_MIN" ] && CORE_MIN=$core
+            [ "$core" -gt "$CORE_MAX" ] && CORE_MAX=$core
+        fi
+        if [[ "$vram" =~ ^[0-9]+$ ]] && [ "$vram" -ne -1 ]; then
+            VRAM_N=$((VRAM_N + 1))
+            VRAM_SUM=$((VRAM_SUM + vram))
+            [ "$vram" -lt "$VRAM_MIN" ] && VRAM_MIN=$vram
+            [ "$vram" -gt "$VRAM_MAX" ] && VRAM_MAX=$vram
+        fi
+        if [[ "$hot" =~ ^[0-9]+$ ]] && [ "$hot" -ne -1 ]; then
+            HOT_N=$((HOT_N + 1))
+            HOT_SUM=$((HOT_SUM + hot))
+            [ "$hot" -lt "$HOT_MIN" ] && HOT_MIN=$hot
+            [ "$hot" -gt "$HOT_MAX" ] && HOT_MAX=$hot
+        fi
+    done <<< "$out"
+}
+
+hold_fans() {
+    local speed="$1" content cur_speed cur_pid
+
+    if ! systemctl is-active --quiet set-fan-curve; then
+        echo "[setfan] Aviso: el servicio set-fan-curve no está activo."
+        echo "         Inícialo con: sudo systemctl start set-fan-curve"
+    fi
+
+    run_root mkdir -p "$CONTROL_DIR" || {
+        echo "[setfan] Error: no se pudo crear $CONTROL_DIR." >&2
+        exit 1
+    }
+
+    printf '%s %s\n' "$speed" "$$" | run_root tee "$MANUAL_FILE" >/dev/null || {
+        echo "[setfan] Error: no se pudo escribir $MANUAL_FILE." >&2
+        exit 1
+    }
+
+    echo "[setfan] Ventiladores fijados al ${speed} %."
+    echo "[setfan] Ctrl+C para cancelar, o 'setfan auto' desde otra terminal."
+    echo "[setfan] El bloqueo crítico puede forzar 100 % si se supera critical_temp."
+
+    trap on_signal INT TERM HUP
+    trap cleanup_file EXIT
+
+    while true; do
+        if ! content=$(read_manual); then
+            echo "[setfan] El control manual fue cancelado; saliendo."
+            CLEANED=1   # el archivo ya no existe
+            exit 0
+        fi
+
+        read -r cur_speed cur_pid <<< "$content"
+        if [ "${cur_pid:-}" != "$$" ]; then
+            echo "[setfan] Otra prueba tomó el control (PID ${cur_pid:-?}); saliendo."
+            CLEANED=1
+            exit 0
+        fi
+        if [ -n "${cur_speed:-}" ] && [ "$cur_speed" != "$speed" ]; then
+            echo "[setfan] La velocidad cambió a ${cur_speed} % desde otra terminal; saliendo."
+            CLEANED=1
+            exit 0
+        fi
+
+        show_live "$speed"
+        sleep "$INTERVAL"
+    done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Argumentos
+# ─────────────────────────────────────────────────────────────────────────────
+case "${1:-}" in
+    ""|-h|--help|help)
+        usage
+        ;;
+    status)
+        show_status
+        ;;
+    auto|off|stop)
+        cancel_manual
+        ;;
+    max)
+        hold_fans 100
+        ;;
+    *)
+        if [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 0 ] && [ "$1" -le 100 ]; then
+            if [ "$1" -eq 0 ]; then
+                echo "[setfan] Aviso: 0 % puede ser interpretado por el driver como control automático."
+            fi
+            hold_fans "$1"
+        else
+            echo "[setfan] Error: '$1' no es válido. Usa 0-100, max, auto o status." >&2
+            echo
+            usage >&2
+            exit 1
+        fi
+        ;;
+esac
