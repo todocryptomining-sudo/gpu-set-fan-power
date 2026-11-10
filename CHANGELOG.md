@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.6
+
+- **Corregido `max_temp=100`**: el parser acepta 50-100 °C. Antes rechazaba 100 y usaba 85, lo que hacía que los ventiladores subieran a ~98 % a 84 °C.
+- **`critical_temp` independiente**: puede ser menor que `max_temp` (por ejemplo `max_temp=100`, `critical_temp=95`). Ya no se autoajusta.
+- **Curva nueva**: `min_speed` es solo un suelo; la curva va de 0 a `max_speed` entre `max_temp-40` y `max_temp`.
+- **Nueva clave `max_speed`** (20-100 %): limita la velocidad normal. El bloqueo crítico la ignora y fuerza 100 %.
+- **Estado por ventilador**: Fan 0, Fan 1, … se leen y escriben por separado.
+- **Errores NVML**: se comprueba el retorno de cada `nvmlDeviceSetFanSpeed_v2` y se registra una vez por cambio.
+- **Política manual NVML**: `NVML_FAN_POLICY_MANUAL` al arrancar, reafirmada cada 60 s y restaurada a `AUTO` al parar.
+- **Alerta de ventilador a 0 %**: si un ventilador sigue a 0 % mientras otro funciona (10 s), o si todos leen 0 % con un setpoint alto.
+- **Nuevo `/run/set-fan-curve/fans`**: `vergpu`, `gpustatus` y `setfan` muestran todos los sensores de ventilador.
+- **`setfan`**: muestra Fan0/Fan1 y avisa del 0 %; `status` muestra las velocidades actuales.
+- **Documentación y configuración de ejemplo** actualizadas.
+
 ## v1.5
 
 - **Nuevo `setfan`**: prueba manual de ventiladores.

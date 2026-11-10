@@ -1,0 +1,22 @@
+#!/bin/bash
+# gpusave — Guarda snapshot de config actual
+# Uso: gpusave [nombre_snapshot]
+
+SNAPSHOT_DIR="${HOME}/.gpu-snapshots"
+mkdir -p "$SNAPSHOT_DIR"
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+NAME="${1:-config_${TIMESTAMP}}"
+SNAPSHOT_FILE="${SNAPSHOT_DIR}/${NAME}.ini"
+
+if [[ -f "$HOME/set-fan-config" ]]; then
+    cp "$HOME/set-fan-config" "$SNAPSHOT_FILE"
+    echo "[ok] Config snapshot saved to:"
+    echo "  $SNAPSHOT_FILE"
+    echo ""
+    echo "Restore with:"
+    echo "  cp $SNAPSHOT_FILE ~/set-fan-config && restartgpu"
+else
+    echo "[error] No config file found at ~/set-fan-config"
+    echo "Run: restartgpu  to regenerate"
+fi

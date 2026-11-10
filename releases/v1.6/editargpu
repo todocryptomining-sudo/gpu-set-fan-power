@@ -1,0 +1,46 @@
+#!/bin/bash
+# editargpu — Abre ~/set-fan-config en tu editor
+# Uso: editargpu [ruta-alternativa]
+# Si se pasa -s, hace un snapshot antes de editar
+
+SET_CONFIG="${HOME}/set-fan-config"
+ALT_CONFIG="${1:-$SET_CONFIG}"
+
+if [[ ! -f "$ALT_CONFIG" ]]; then
+    echo "[error] Config file not found: $ALT_CONFIG"
+    echo "Run: sudo systemctl restart set-fan-curve  to regenerate"
+    exit 1
+fi
+
+# Detectar editor preferido
+EDITOR="${EDITOR:-${VISUAL:-$(command -v nano || command -v vim || command -v vi)}}"
+
+if [[ ! -x "$EDITOR" ]]; then
+    EDITOR="nano"
+fi
+
+echo "─── GPU Fan Curve Config (v1.6) ───────────────────────────────"
+echo "File: $ALT_CONFIG"
+echo "Editor: $EDITOR"
+echo "Keys:"
+echo "  max_temp, min_speed, max_speed, critical_temp, use_vram_temp,"
+echo "  use_hotspot_temp, safety_all_sensors, power_limit, persistence"
+echo "  (ver ~/README-gpu.md)"
+echo "────────────────────────────────────────────────────────────────"
+echo ""
+
+$EDITOR "$ALT_CONFIG"
+
+# Después de editar, ofrecer reinicio
+echo ""
+read -rp "Apply changes now? [y/N] " apply
+if [[ "$apply" =~ ^[Yy]$ ]]; then
+    echo "Restarting set-fan-curve service..."
+    sudo systemctl restart set-fan-curve
+    if [[ $? -eq 0 ]]; then
+        echo "[ok] Service restarted. Config applied."
+    else
+        echo "[error] Service failed to restart. Check:"
+        echo "  sudo journalctl -u set-fan-curve -n 20"
+    fi
+fi

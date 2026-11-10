@@ -1,0 +1,44 @@
+#!/bin/bash
+# gpuhelp — ayuda rápida de GPU Fan Curve Controller v1.6
+# Uso: gpuhelp
+
+cat <<'EOF'
+════════════════════════════════════════════════════════════════════
+  GPU Fan Curve Controller v1.6 — comandos
+════════════════════════════════════════════════════════════════════
+
+  MONITOR
+    vergpu                 Monitor en vivo (Core / VRAM / Hotspot / Fans)
+    vergpu -1              Una sola captura y salir
+    gpustatus              Estado rápido del servicio, GPUs y ventiladores
+
+  VENTILADORES
+    setfan 70              Fija TODOS los ventiladores al 70 % hasta cancelar
+    setfan max             Fija los ventiladores al 100 %
+    setfan auto            Cancela la prueba y vuelve a la curva
+    setfan status          Muestra la prueba activa y las velocidades actuales
+
+    La curva normal respeta min_speed (suelo) y max_speed (tope).
+    Si se alcanza critical_temp, el daemon ignora el tope y fuerza 100 %.
+
+  CONFIGURACIÓN
+    editargpu              Edita ~/set-fan-config
+    restartgpu             Reinicia el servicio y aplica los cambios
+    gpusave [nombre]       Guarda una copia de la configuración
+
+  ACTUALIZACIÓN
+    sudo updategpu         Descarga e instala la última versión desde GitHub
+    updategpu --check      Muestra qué versión hay disponible
+
+  SERVICIO
+    systemctl status set-fan-curve
+    journalctl -u set-fan-curve -f
+    sudo ./uninstall.sh    Desinstala (conserva ~/set-fan-config)
+
+  AYUDA
+    gpuhelp                Muestra esta ayuda
+
+  Documentación: ~/README-gpu.md
+  Configuración: ~/set-fan-config
+════════════════════════════════════════════════════════════════════
+EOF

@@ -1,0 +1,119 @@
+# set-fan-config — GPU Fan Curve Controller v1.6
+# Location: ~/set-fan-config  (read by the daemon via $HOME)
+# Lines starting with # are comments. Keys use KEY=value (INI-style).
+#
+# VRAM and Hotspot temperatures are read DIRECTLY from GPU PCI registers
+# (same technique as gddr6.c / nvml_direct_access.c), NOT from NVML.
+# On RTX 3090 with recent drivers NVML reports the core temp for the
+# "memory" sensor, so PCI access is the only reliable GDDR6X reading.
+#
+#   VRAM:    BAR0 + 0x0000E2A8   temp = (raw & 0xFFF) / 0x20
+#   Hotspot: BAR0 + 0x0002046C   temp = (raw >> 8) & 0xFF
+#
+# The service runs as root and needs access to /dev/mem. It publishes the
+# readings to /run/set-fan-curve/temps and the per-fan speeds to
+# /run/set-fan-curve/fans so `vergpu` works without root.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temperature curve
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The curve is independent of min_speed:
+#
+#   temp <= (max_temp - 40) .................... 0 %   (then min_speed floor)
+#   (max_temp - 40) < temp < max_temp ......... linear ramp 0 → max_speed
+#   temp >= max_temp .......................... max_speed
+#   temp >= critical_temp ..................... 100 % (safety lock)
+#
+# Final speed = max(min_speed, curve), capped at max_speed, except when the
+# critical safety lock is active.
+
+# Target maximum temperature (50-100 °C).
+# 100 means the normal curve never reaches max_speed; use critical_temp as
+# the real safety limit. Lower values make the fans ramp earlier.
+max_temp=85
+
+# Minimum fan speed / floor (0-80 %).
+# It is applied AFTER the curve: the curve may ask for 0 %, but the fans
+# never go below this value during normal operation.
+# For a fixed-speed test use the `setfan` command instead (e.g. setfan 70).
+min_speed=40
+
+# Maximum normal fan speed (20-100 %).
+# Caps the curve and the min_speed floor during normal operation.
+# When critical_temp is reached the daemon ignores this cap and forces 100 %.
+# Must be >= min_speed (otherwise it is raised to min_speed).
+max_speed=100
+
+# Hard safety lock temperature (50-100 °C). Independent of max_temp.
+# When the effective temperature reaches this value, fans go to 100 %
+# and stay latched until the temperature drops 5 °C below it.
+# It may be LOWER than max_temp: e.g. max_temp=100, critical_temp=95 means
+# "stay at max_speed up to 100 °C, but force 100 % from 95 °C".
+# The effective temperature is core + the sensors enabled below
+# (unless safety_all_sensors=1).
+critical_temp=93
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Direct PCI temperature reads
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Use real VRAM temperature for the curve (1 = yes, 0 = no).
+# Recommended: 1 on RTX 3090 / GDDR6X.
+use_vram_temp=1
+
+# Use GPU die Hotspot temperature for the curve (1 = yes, 0 = no).
+# Enable only if the value looks sane on your card.
+use_hotspot_temp=0
+
+# Safety lock sensor set (1 = always use core + VRAM + hotspot; 0 = use the
+# same sensors enabled above for the curve).
+# 0 is recommended: with 1, a hot hotspot keeps the fans at 100 % even if
+# use_hotspot_temp=0. Set 1 only if you want maximum protection.
+safety_all_sensors=0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Power management
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Power limit in watts (0 = disabled / GPU default).
+# The daemon re-asserts it every 10 seconds (power-limit dominance).
+# Example: 250 for an RTX 3090 (default ~350 W).
+power_limit=0
+
+# Persistence mode (0 = disabled, 1 = enabled).
+persistence=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example profiles
+# ─────────────────────────────────────────────────────────────────────────────
+
+# RTX 3090 compute / mining (stable and cool):
+#   max_temp=72
+#   min_speed=55
+#   max_speed=100
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=260
+#   persistence=1
+
+# Quiet but safe (cap the fans during normal operation):
+#   max_temp=90
+#   min_speed=25
+#   max_speed=70
+#   critical_temp=95
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=250
+#   persistence=1
+
+# Maximum performance:
+#   max_temp=70
+#   min_speed=70
+#   max_speed=100
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=1
+#   power_limit=350
+#   persistence=1
