@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.82 (experimental)
+
+- Diagnóstico pasivo `gpu-fan-diagnostic`; no cambia velocidad durante instalación.
+- Consulta opcional de RPM vía `hwmon/sysfs`.
+- `vergpu` ya no genera alarma global por un único canal NVML en 0 % cuando otro canal está activo.
+- Nueva orden `ordenargpu` genera copia ordenada sin modificar configuración original.
+- Instalaciones nuevas reciben plantilla comentada en español; actualizaciones conservan valores existentes.
+- GPU no reconocida no recibe lecturas MMIO inventadas.
+- Pendiente validación en hardware NVIDIA real.
+
 ## v1.81 (experimental)
 
 - Corrige identificación de procesos en `vergpu`: usa nombre de proceso NVML (`python`, aplicaciones, etc.).

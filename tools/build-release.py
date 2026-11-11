@@ -27,6 +27,8 @@ EXECUTABLES = {
     "setfan",
     "gpuhelp",
     "updategpu",
+    "gpu-fan-diagnostic",
+    "ordenargpu",
 }
 
 DEFAULT_EPOCH = 1793836800  # 2026-11-05 00:00:00 UTC
