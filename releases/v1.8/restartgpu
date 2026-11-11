@@ -1,0 +1,80 @@
+#!/bin/bash
+# restartgpu — Valida la configuración y reinicia el servicio
+# Uso: restartgpu [ruta-alternativa]
+#
+# La validación se ejecuta antes de tocar el servicio. Si el archivo tiene
+# errores (typos, claves desconocidas, valores fuera de rango), el servicio
+# NO se reinicia y sigue funcionando con la configuración anterior.
+set -u
+
+SERVICE="set-fan-curve"
+BIN="/usr/local/bin/set_fan_curve"
+
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+else
+    USER_HOME="$HOME"
+fi
+[[ -z "${USER_HOME:-}" ]] && USER_HOME="$HOME"
+
+CONFIG="${1:-$USER_HOME/set-fan-config}"
+DEFAULT_CONFIG="$USER_HOME/set-fan-config"
+
+echo "─── restartgpu ──────────────────────────────────────────────────"
+
+if [[ "$CONFIG" != "$DEFAULT_CONFIG" ]]; then
+    echo "[error] El servicio siempre lee $DEFAULT_CONFIG"
+    echo "        Valida ese archivo, no $CONFIG"
+    exit 1
+fi
+
+if [[ ! -f "$CONFIG" ]]; then
+    echo "[error] No existe $CONFIG"
+    echo "  Revisa la instalación o arranca el servicio una vez."
+    exit 1
+fi
+
+if [[ ! -x "$BIN" ]]; then
+    echo "[error] No se encuentra $BIN"
+    echo "  Reinstala con: sudo updategpu"
+    exit 1
+fi
+
+echo "Validando $CONFIG ..."
+echo ""
+if ! "$BIN" --check-config "$CONFIG"; then
+    echo ""
+    echo "[error] La configuración tiene errores: NO se reinicia el servicio."
+    echo "        El servicio sigue con la configuración anterior."
+    echo "        Corrige con: editargpu"
+    exit 1
+fi
+
+echo ""
+echo "Reiniciando $SERVICE ..."
+if [[ $EUID -eq 0 ]]; then
+    systemctl restart "$SERVICE"
+else
+    sudo systemctl restart "$SERVICE"
+fi
+rc=$?
+
+if [[ $rc -ne 0 ]]; then
+    echo "[error] No se pudo reiniciar el servicio."
+    echo "  Revisa: sudo journalctl -u $SERVICE -n 40 --no-pager"
+    exit 1
+fi
+
+sleep 2
+if systemctl is-active --quiet "$SERVICE"; then
+    echo "[ok] Servicio reiniciado con la configuración validada."
+    echo "  Config: $CONFIG"
+    echo "  Logs:   journalctl -u $SERVICE -f"
+    echo ""
+    echo "Current status:"
+    systemctl status "$SERVICE" --no-pager -n 5
+else
+    echo "[error] El servicio no está activo tras el reinicio."
+    echo "  Revisa: sudo journalctl -u $SERVICE -n 50 --no-pager"
+    exit 1
+fi

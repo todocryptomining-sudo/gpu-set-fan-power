@@ -1,0 +1,164 @@
+#!/bin/bash
+# editargpu — Edita ~/set-fan-config, muestra los cambios, valida y confirma
+# Uso: editargpu [ruta-alternativa]
+#
+# Flujo:
+#   1. Abre el editor.
+#   2. Muestra el diff respecto al archivo original.
+#   3. Ejecuta set_fan_curve --check-config.
+#   4. Si hay errores, no toca el servicio y ofrece volver a editar.
+#   5. Solo si la configuración es válida, pregunta si reiniciar el servicio.
+set -u
+
+SERVICE="set-fan-curve"
+BIN="/usr/local/bin/set_fan_curve"
+
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+else
+    USER_HOME="$HOME"
+fi
+[[ -z "${USER_HOME:-}" ]] && USER_HOME="$HOME"
+
+DEFAULT_CONFIG="${USER_HOME}/set-fan-config"
+CONFIG="${1:-$DEFAULT_CONFIG}"
+
+if [[ ! -f "$CONFIG" ]]; then
+    echo "[error] No existe el archivo: $CONFIG"
+    echo "  Arranca el servicio una vez para crearlo: sudo systemctl restart $SERVICE"
+    exit 1
+fi
+
+if [[ ! -x "$BIN" ]]; then
+    echo "[error] No se encuentra $BIN"
+    echo "  Reinstala con: sudo updategpu"
+    exit 1
+fi
+
+# Editor: respeta EDITOR/VISUAL; si no, busca nano/vim/vi.
+EDITOR_CMD=()
+if [[ -n "${EDITOR:-}" ]]; then
+    read -r -a EDITOR_CMD <<< "$EDITOR"
+elif [[ -n "${VISUAL:-}" ]]; then
+    read -r -a EDITOR_CMD <<< "$VISUAL"
+else
+    for candidate in nano vim vi; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            EDITOR_CMD=("$candidate")
+            break
+        fi
+    done
+fi
+
+if [[ ${#EDITOR_CMD[@]} -eq 0 ]]; then
+    echo "[error] No hay editor disponible."
+    echo "  Define EDITOR, por ejemplo: EDITOR=nano editargpu"
+    exit 1
+fi
+
+BACKUP="$(mktemp "${TMPDIR:-/tmp}/set-fan-config.XXXXXX")" || {
+    echo "[error] No se pudo crear el archivo temporal."
+    exit 1
+}
+trap 'rm -f "$BACKUP"' EXIT
+cp -f "$CONFIG" "$BACKUP"
+
+echo "─── GPU Fan Curve Config (v1.8) ───────────────────────────────"
+echo "Archivo: $CONFIG"
+echo "Editor:  ${EDITOR_CMD[*]}"
+echo "Rangos:  max_temp 50-100 | min_speed 0-80 | max_speed 20-100"
+echo "         critical_temp 50-110 (puede ser > max_temp)"
+echo "────────────────────────────────────────────────────────────────"
+echo ""
+
+while true; do
+    "${EDITOR_CMD[@]}" "$CONFIG"
+
+    echo ""
+    echo "─── Modificaciones ────────────────────────────────────────────"
+    has_changes=0
+    if command -v diff >/dev/null 2>&1; then
+        if diff -u --label "antes ($BACKUP)" --label "después ($CONFIG)" \
+                "$BACKUP" "$CONFIG"; then
+            echo "(sin cambios)"
+        else
+            has_changes=1
+        fi
+    else
+        if cmp -s "$BACKUP" "$CONFIG"; then
+            echo "(sin cambios)"
+        else
+            echo "(diff no disponible; el archivo cambió)"
+            has_changes=1
+        fi
+    fi
+    echo "────────────────────────────────────────────────────────────────"
+    echo ""
+
+    if [[ "$has_changes" -eq 0 ]]; then
+        read -rp "No hay cambios. ¿Salir sin tocar el servicio? [Y/n] " quit
+        [[ "$quit" =~ ^[Nn]$ ]] && continue
+        echo "Servicio sin cambios."
+        exit 0
+    fi
+
+    echo "Validando la configuración (el servicio todavía NO se ha tocado)..."
+    echo ""
+    if "$BIN" --check-config "$CONFIG"; then
+        echo ""
+        break
+    fi
+
+    echo ""
+    echo "[error] Hay errores en la configuración. El servicio sigue con la"
+    echo "        configuración anterior y no se ha reiniciado."
+    read -rp "¿Volver a editar? [Y/n] " again
+    if [[ "$again" =~ ^[Nn]$ ]]; then
+        echo ""
+        echo "El archivo sigue guardado con errores; no se ha aplicado nada."
+        echo "Corrige con: editargpu    (restartgpu también rechazará el archivo)"
+        exit 1
+    fi
+done
+
+echo ""
+if [[ "$CONFIG" != "$DEFAULT_CONFIG" ]]; then
+    echo "[warn] El servicio usa $DEFAULT_CONFIG, no $CONFIG."
+    echo "       Valida y aplica el archivo correcto con: restartgpu"
+    exit 0
+fi
+
+read -rp "¿Reiniciar el servicio para aplicar los cambios? [y/N] " apply
+if [[ ! "$apply" =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Cambios guardados pero NO aplicados."
+    echo "  Para aplicarlos: restartgpu"
+    exit 0
+fi
+
+echo ""
+echo "Reiniciando $SERVICE..."
+if [[ $EUID -eq 0 ]]; then
+    systemctl restart "$SERVICE"
+else
+    sudo systemctl restart "$SERVICE"
+fi
+rc=$?
+
+if [[ $rc -ne 0 ]]; then
+    echo "[error] No se pudo reiniciar el servicio."
+    echo "  Revisa: sudo journalctl -u $SERVICE -n 40 --no-pager"
+    exit 1
+fi
+
+sleep 2
+if systemctl is-active --quiet "$SERVICE"; then
+    echo "[ok] Servicio reiniciado; configuración aplicada."
+    echo "  Estado: systemctl status $SERVICE"
+    echo "  Logs:   journalctl -u $SERVICE -n 20 --no-pager"
+    echo "  GPUs:   vergpu -1"
+else
+    echo "[error] El servicio no está activo tras el reinicio."
+    echo "  Revisa: sudo journalctl -u $SERVICE -n 50 --no-pager"
+    exit 1
+fi

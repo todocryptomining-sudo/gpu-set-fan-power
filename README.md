@@ -1,4 +1,4 @@
-# GPU Fan Curve Controller
+# GPU Fan Curve Controller v1.8
 
 Control de ventiladores para GPUs NVIDIA en Linux con **lectura directa de la temperatura de VRAM y hotspot desde los registros PCI** de la tarjeta, curva de ventilador configurable, límite de velocidad, bloqueo térmico crítico y pruebas manuales de ventilador.
 
@@ -12,16 +12,19 @@ Control de ventiladores para GPUs NVIDIA en Linux con **lectura directa de la te
 - **Curva de ventilador independiente de `min_speed`**: de 0 a `max_speed` entre `max_temp-40` y `max_temp`, con `min_speed` como suelo.
 - **`max_speed`**: limita la velocidad normal de los ventiladores. El bloqueo crítico lo ignora y fuerza 100 %.
 - **Estado por ventilador**: Fan 0, Fan 1, … se leen y escriben por separado; se comprueba cada retorno NVML.
-- **Alerta de ventilador a 0 %**: avisa si un ventilador se queda parado mientras otro funciona.
+- **Alerta de ventilador a 0 %**: NVML informa porcentaje; 0 % no demuestra 0 RPM.
+- **Escrituras reducidas**: intervalo mínimo, umbral, histéresis y re-sincronización tras errores.
 - **Bloqueo crítico con latch**: al alcanzar `critical_temp` (comparación `>=`) fuerza 100 % y no baja hasta 5 °C por debajo. Es independiente de `max_temp` y admite hasta 110 °C para hotspots GDDR6X.
 - **Validación de configuración**: `set_fan_curve --check-config` detecta typos, claves desconocidas, valores vacíos, no numéricos y fuera de rango. `restartgpu` y `editargpu` validan antes de aplicar.
-- **Dominancia de power limit**: reafirma el límite cada 10 s.
+- **Power limit configurable**: `startup`, `monitor` o `enforce`; `monitor` no escribe y se recomienda en Vast.ai.
+- **Estado por GPU**: `NORMAL`, `SENSOR_ERROR`, `NVML_ERROR`, `GPU_LOST`, `RECOVERING` y `DISABLED`.
 - **Política NVML manual**: se fija y reafirma cada 60 s; se restaura `AUTO` al detener el servicio.
 - **Persistence mode** opcional.
 - **`setfan`**: fija todos los ventiladores a un porcentaje concreto durante una prueba, con resumen de temperaturas.
 - **`gpuhelp`**: lista todos los comandos con una descripción corta.
 - **`updategpu`**: actualiza desde GitHub conservando la configuración.
-- **No modifica** drivers, CUDA, Docker ni componentes de Vast.ai. No hace unbind/bind PCI, no carga módulos y no escribe en registros MMIO: solo lee.
+- **No modifica** drivers, CUDA, Docker ni componentes de Vast.ai. No hace unbind/bind PCI, no carga módulos y no escribe registros MMIO: solo lee.
+- En GPU perdida no ejecuta `nvidia-smi --gpu-reset`, `reboot`, `systemctl restart docker` ni `systemctl restart vastai`.
 
 ---
 

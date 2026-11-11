@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8 (en desarrollo)
+
+- Endurecimiento de lectura PCI/MMIO: tabla explícita por device ID, vendor NVIDIA, BDF válido, BAR0 completo, offsets dentro de rango, aritmética de 64 bits y mapeos solo lectura.
+- Estado detallado por GPU: `INITIALIZING`, `NORMAL`, `SENSOR_ERROR`, `NVML_ERROR`, `GPU_LOST`, `RECOVERING` y `DISABLED`.
+- En `GPU_LOST` se suspenden NVML/MMIO, se cierran mapeos y se registra el motivo; no hay reset, reboot ni reinicio de Docker/Vast.ai.
+- VRAM y hotspot independientes, con timestamps, plausibilidad, timeout, rachas de fallo y último valor válido limitado.
+- Escrituras de ventilador reducidas mediante `fan_update_interval_ms`, `fan_change_threshold`, histéresis y aumentos críticos inmediatos; estado solicitado/reportado/aplicado por fan.
+- `power_limit_mode=startup|monitor|enforce`; `monitor` recomendado en Vast.ai. `NOT_SUPPORTED` no degrada el control de ventiladores.
+- Multi-GPU independiente, recuperación opcional mediante sondeos NVML seguros y máximo de tres intentos.
+- Nuevas pruebas de daemon y MMIO con mocks, sysfs falso y memoria mapeada falsa.
+- Instalador v1.8 con copia de seguridad antes de upgrade y límites systemd de reinicio más conservadores.
+- **No declarada producción:** falta validar en Ubuntu 24.04, RTX reales, `/dev/mem`, NVML y comportamiento físico de ventiladores.
+
 ## v1.7
 
 - **`critical_temp` hasta 110 °C** (antes 50-100). Permite picos normales de 100-105 °C en hotspots GDDR6X sin bloquear. El bloqueo sigue disparando con `>=`.

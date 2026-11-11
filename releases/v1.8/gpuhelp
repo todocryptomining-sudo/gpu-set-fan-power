@@ -1,0 +1,58 @@
+#!/bin/bash
+# gpuhelp — ayuda rápida de GPU Fan Curve Controller v1.8
+# Uso: gpuhelp
+
+cat <<'EOF'
+════════════════════════════════════════════════════════════════════
+  GPU Fan Curve Controller v1.8 — comandos
+════════════════════════════════════════════════════════════════════
+
+  MONITOR
+    vergpu                 Monitor en vivo (Core / VRAM / Hotspot / Fans)
+    vergpu -1              Una sola captura y salir
+    gpustatus              Estado rápido del servicio, GPUs y ventiladores
+
+  VENTILADORES
+    setfan 70              Fija TODOS los ventiladores al 70 % hasta cancelar
+    setfan max             Fija los ventiladores al 100 %
+    setfan auto            Cancela la prueba y vuelve a la curva
+    setfan status          Muestra la prueba activa y las velocidades actuales
+
+    La curva normal respeta min_speed (suelo) y max_speed (tope).
+    Si se alcanza critical_temp, el daemon ignora el tope y fuerza 100 %.
+
+  CONFIGURACIÓN
+    editargpu              Edita ~/set-fan-config
+                           Muestra el diff, valida y pregunta antes de reiniciar
+    restartgpu             Valida y reinicia (no aplica configs con errores)
+    gpusave [nombre]       Guarda una copia de la configuración
+
+    Comprobar sin reiniciar:
+      set_fan_curve --check-config ~/set-fan-config
+
+    Rangos:
+      max_temp       50-100 °C
+      min_speed       0-80 %
+      max_speed      20-100 %
+      critical_temp  50-110 °C (puede ser mayor que max_temp)
+
+    El bloqueo crítico usa core + los sensores activados en la curva.
+    El hotspot solo fuerza 100 % si use_hotspot_temp=1 o
+    safety_all_sensors=1. `--check-config` muestra los sensores exactos.
+
+  ACTUALIZACIÓN
+    sudo updategpu         Descarga e instala la última versión desde GitHub
+    updategpu --check      Muestra qué versión hay disponible
+
+  SERVICIO
+    systemctl status set-fan-curve
+    journalctl -u set-fan-curve -f
+    sudo ./uninstall.sh    Desinstala (conserva ~/set-fan-config)
+
+  AYUDA
+    gpuhelp                Muestra esta ayuda
+
+  Documentación: ~/README-gpu.md
+  Configuración: ~/set-fan-config
+════════════════════════════════════════════════════════════════════
+EOF
