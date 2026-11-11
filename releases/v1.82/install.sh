@@ -248,6 +248,13 @@ install -m 755 "$BUILD_DIR/$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"
 install -m 755 "$BUILD_DIR/$VERGPU_BINARY" "${INSTALL_DIR}/${VERGPU_BINARY}"
 log_ok "Binaries installed"
 
+if command -v nvidia-smi >/dev/null 2>&1; then
+    log_info "Running passive fan diagnostic (no fan speed changes)..."
+    "${BUILD_DIR}/${DIAGNOSTIC_SCRIPT}" || log_warn "Passive diagnostic failed; installation continues"
+else
+    log_warn "nvidia-smi not found; passive fan diagnostic skipped"
+fi
+
 log_info "Installing GPU commands..."
 mkdir -p "$USER_COMMANDS_DIR"
 chown "$ACTUAL_USER:$ACTUAL_USER" "$USER_COMMANDS_DIR" 2>/dev/null || true
