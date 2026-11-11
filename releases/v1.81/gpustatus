@@ -1,0 +1,75 @@
+#!/bin/bash
+# gpustatus — Estado rápido de GPUs en pocas líneas
+# Uso: gpustatus
+
+echo "─── gpustatus ───────────────────────────────────────────────────"
+
+if ! nvidia-smi --query-gpu=index,name,temperature.gpu,utilization.gpu,power.draw,fan.speed --format=csv,noheader,nounits 2>/dev/null; then
+    # Fallback si nvidia-smi no está
+    echo "  [error] nvidia-smi not found or NVML not initialized"
+    echo "  Check: sudo journalctl -u set-fan-curve -n 5"
+    exit 1
+fi
+
+# Temperaturas reales leídas por el daemon desde registros PCI
+if [[ -r /run/set-fan-curve/temps ]]; then
+    echo ""
+    echo "Real PCI temperatures (VRAM / Hotspot):"
+    awk '{
+        vram = ($2 >= 0) ? $2 " °C" : "N/A";
+        hot  = ($3 >= 0) ? $3 " °C" : "N/A";
+        printf "  %s: VRAM=%s  Hotspot=%s\n", $1, vram, hot;
+    }' /run/set-fan-curve/temps
+fi
+
+# Velocidades por sensor de ventilador (Fan 0, Fan 1, ...)
+if [[ -r /run/set-fan-curve/fans ]]; then
+    echo ""
+    echo "Fan speeds per sensor (from daemon):"
+    awk '{
+        n = $2 + 0;
+        line = "";
+        zero = 0; running = 0;
+        for (i = 3; i < 3 + n; i++) {
+            v = $i + 0;
+            label = sprintf(" Fan%d=", i - 3);
+            if (v >= 0) {
+                line = line label v "%";
+                if (v == 0) zero = 1; else running = 1;
+            } else {
+                line = line label "?";
+            }
+        }
+        if (zero) line = line "  [!] NVML informa 0 %; no equivale a 0 RPM";
+        printf "  %s:%s\n", $1, line;
+    }' /run/set-fan-curve/fans
+fi
+
+if [[ -r /run/set-fan-curve/state ]]; then
+    echo ""
+    echo "Daemon GPU state:"
+    awk '{printf "  %s: %s\n", $1, $2}' /run/set-fan-curve/state
+fi
+
+if [[ -r /run/set-fan-curve/fanstate ]]; then
+    echo ""
+    echo "Fan write state:"
+    awk '{printf "  %s\n", $0}' /run/set-fan-curve/fanstate
+fi
+
+# Prueba manual de ventiladores (setfan)
+if [[ -r /run/set-fan-curve/manual ]]; then
+    read -r manual_speed manual_pid < /run/set-fan-curve/manual 2>/dev/null || true
+    if [[ -n "${manual_pid:-}" ]] && [[ -d "/proc/$manual_pid" ]]; then
+        echo ""
+        echo "Manual fan test: ${manual_speed} % (PID ${manual_pid}, active)"
+    else
+        echo ""
+        echo "Manual fan test: stale file (PID ${manual_pid:-?} not running)"
+    fi
+fi
+
+echo ""
+echo "Service status: $(systemctl is-active set-fan-curve 2>/dev/null || echo 'unknown')"
+echo "Config: $HOME/set-fan-config (last modified: $(stat -c %y "$HOME/set-fan-config" 2>/dev/null | cut -d' ' -f1,2 || echo 'not found'))"
+echo "-----------------------------------------------------------------"

@@ -1,0 +1,251 @@
+# set-fan-config — GPU Fan Curve Controller v1.81
+# Location: ~/set-fan-config  (read by the daemon via $HOME)
+# Lines starting with # are comments. Keys use KEY=value (INI-style).
+#
+# Validate without restarting (no root, does not touch the service):
+#   set_fan_curve --check-config ~/set-fan-config
+# restartgpu and editargpu run this automatically and refuse to apply a
+# configuration that contains errors.
+#
+# VRAM and Hotspot temperatures are read DIRECTLY from GPU PCI registers
+# (same technique as gddr6.c / nvml_direct_access.c), NOT from NVML.
+# On RTX 3090 with recent drivers NVML reports the core temp for the
+# "memory" sensor, so PCI access is the only reliable GDDR6X reading.
+#
+# Verified offsets (v1.81 table; unknown device IDs are NOT read):
+#   GA102 (RTX 3090 0x2204, 3080 0x2206, 3080 Ti 0x2203):
+#     VRAM:    BAR0 + 0x0000E2A8   temp = (raw & 0xFFF) / 0x20
+#     Hotspot: BAR0 + 0x0002046C   temp = (raw >> 8) & 0xFF
+#   GA104 (RTX 3070 0x2484 / 3070 LHR 0x2488):
+#     VRAM:    BAR0 + 0x0000EE50   temp = (raw & 0xFFF) / 0x20
+#     Hotspot: BAR0 + 0x0002046C   temp = (raw >> 8) & 0xFF
+#
+# The service runs as root and needs access to /dev/mem. It publishes:
+#   /run/set-fan-curve/temps    <bdf> <vram> <hotspot>
+#   /run/set-fan-curve/fans     <bdf> <n> <s0> ... <sn-1>
+#   /run/set-fan-curve/state    <bdf> <STATE> <core> <vram> <hotspot> <critical> <power_w>
+#   /run/set-fan-curve/fanstate <bdf> fan=<i> desired=<d> applied=<a> ...
+# so `vergpu` and `gpustatus` work without root.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temperature curve
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The curve is independent of min_speed:
+#
+#   temp <= (max_temp - 40) .................... min_speed
+#   (max_temp - 40) < temp < max_temp ......... linear ramp min_speed → max_speed
+#   temp >= max_temp .......................... max_speed
+#   temp >= critical_temp ..................... 100 % (safety lock)
+#
+# Final speed = max(min_speed, curve), capped at max_speed, except when the
+# critical safety lock is active.
+
+# Target maximum temperature (50-100 °C).
+# 100 means the normal curve never reaches max_speed; use critical_temp as
+# the real safety limit. Lower values make the fans ramp earlier.
+max_temp=85
+
+# Minimum fan speed / floor (0-80 %).
+# The automatic curve starts at this value. Manual tests can request 0-100 %.
+# For a fixed-speed test use the `setfan` command instead (e.g. setfan 70).
+min_speed=40
+
+# Maximum normal fan speed (20-100 %).
+# Caps the curve and the min_speed floor during normal operation.
+# When critical_temp is reached the daemon ignores this cap and forces 100 %.
+# Must be >= min_speed (otherwise it is raised to min_speed).
+max_speed=100
+
+# Hard safety lock temperature (50-110 °C). Independent of max_temp.
+# When the effective temperature reaches this value (>=), fans go to 100 %
+# and stay latched until the temperature drops 5 °C below it.
+# It may be LOWER than max_temp: e.g. max_temp=100, critical_temp=95 means
+# "stay at max_speed up to 100 °C, but force 100 % from 95 °C".
+#
+# Values above 100 are allowed for GDDR6X hotspots that normally peak at
+# 100-105 °C. The lock triggers at >= critical_temp, so if 105 °C is a
+# normal peak and you want headroom use 106-110. Do not use >100 for core.
+#
+# The effective temperature is the maximum of the sensors that feed the
+# lock (see use_hotspot_temp / safety_all_sensors below).
+critical_temp=93
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Direct PCI temperature reads
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Use real VRAM temperature for the curve (1 = yes, 0 = no).
+# Recommended: 1 on RTX 3090 / GDDR6X.
+use_vram_temp=1
+
+# Use GPU die Hotspot temperature for the curve (1 = yes, 0 = no).
+# Enable only if the value looks sane on your card.
+# IMPORTANT: with safety_all_sensors=0 the critical lock uses the same
+# sensors as the curve, so enabling this also lets the hotspot force 100 %.
+use_hotspot_temp=0
+
+# Safety lock sensor set (1 = always use core + VRAM + hotspot; 0 = use the
+# same sensors enabled above for the curve).
+# 0 is recommended: with 1, a hot hotspot keeps the fans at 100 % even if
+# use_hotspot_temp=0. Set 1 only if you want maximum protection.
+# With 0 and use_hotspot_temp=0 the hotspot is still displayed, but it never
+# forces 100 % by itself.
+safety_all_sensors=0
+
+# Plausibility window for any sensor (default 1-125 °C).
+# A reading outside this window is discarded and counted as a sensor failure.
+# Raise sensor_max_temp only if you really expect >125 °C (do not).
+sensor_min_temp=1
+sensor_max_temp=125
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sensor freshness and failure handling (v1.81)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# How often core/VRAM/hotspot are sampled, in milliseconds (250-60000).
+# The main loop wakes at min(sensor_interval_ms, fan_update_interval_ms), so
+# manual fan changes are still detected every second.
+sensor_interval_ms=2000
+
+# Maximum age of a reading before it is considered stale, in milliseconds
+# (1000-300000). Must be >= sensor_interval_ms. Default 3x the interval.
+# A stale sensor is not used for the curve or the critical lock.
+sensor_timeout_ms=6000
+
+# If NO curve sensor is available for 3 consecutive samples, the daemon
+# enters SENSOR_ERROR. With 1 it restores automatic (driver) fan control;
+# with 0 it sets max_speed to keep the fans running. Automatic control is
+# the safe default; restore_auto_on_sensor_failure=0 is only for cards whose
+# driver default is too quiet under load.
+restore_auto_on_sensor_failure=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fan write reduction (v1.81)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Minimum time between two writes to the same fan, in milliseconds
+# (250-60000). The curve is still evaluated every tick; this only throttles
+# redundant writes.
+fan_update_interval_ms=2000
+
+# Minimum fan-speed change, in percent, that triggers a write once the
+# interval has elapsed (0-25).
+# Increases towards the critical range (>=85 %) are applied immediately,
+# without waiting for the interval. Decreases require MORE than this
+# threshold (one extra point of hysteresis) to avoid oscillation.
+fan_change_threshold=2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Power management
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Power limit in watts (0 = disabled / GPU default).
+# Ranges are validated against the GPU's own min/max constraints; every NVML
+# return value is checked. Example: 250 for an RTX 3090 (default ~350 W).
+power_limit=0
+
+# What to do with power_limit:
+#   startup  apply once at startup, never re-assert
+#   monitor  read and log the limit, NEVER write it (recommended on Vast.ai,
+#            where the platform owns the power budget)
+#   enforce  apply and re-assert it periodically (v1.7 behavior)
+# If power_limit > 0 and this key is absent, 'enforce' is used to preserve
+# v1.7 behavior. The example profiles below use 'monitor' on purpose.
+power_limit_mode=monitor
+
+# Persistence mode (0 = disabled, 1 = enabled).
+persistence=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Failure policy (v1.81)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Stop the service when a GPU is lost AND no other GPU remains controllable.
+# A single lost GPU in a multi-GPU host does NOT stop fan control for the
+# healthy ones. The daemon never runs nvidia-smi --gpu-reset, never reboots
+# and never restarts Docker or Vast.ai.
+stop_on_gpu_lost=1
+
+# Automatic recovery probes after GPU_LOST (0 = do not probe).
+# When enabled, the daemon only performs safe NVML probes (max 3 attempts,
+# 60 s apart). It does NOT reset the GPU or reboot the host.
+auto_recover_gpu=0
+
+# Log NVML and PCI/MMIO errors (1 = yes, 0 = quiet).
+# Quiet mode still changes the GPU state; only the log lines are suppressed.
+log_nvml_errors=1
+log_pcie_errors=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example profiles
+# ─────────────────────────────────────────────────────────────────────────────
+
+# RTX 3090 compute / mining (stable and cool):
+#   max_temp=72
+#   min_speed=55
+#   max_speed=100
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=260
+#   power_limit_mode=monitor
+#   persistence=1
+
+# Quiet but safe (cap the fans during normal operation):
+#   max_temp=90
+#   min_speed=25
+#   max_speed=70
+#   critical_temp=95
+#   use_vram_temp=1
+#   use_hotspot_temp=0
+#   power_limit=250
+#   power_limit_mode=monitor
+#   persistence=1
+
+# Maximum performance:
+#   max_temp=70
+#   min_speed=70
+#   max_speed=100
+#   critical_temp=90
+#   use_vram_temp=1
+#   use_hotspot_temp=1
+#   power_limit=350
+#   power_limit_mode=enforce
+#   persistence=1
+
+# Hot GDDR6X hotspot (lock above normal 100-105 °C peaks):
+#   max_temp=100
+#   min_speed=25
+#   max_speed=100
+#   critical_temp=107
+#   use_vram_temp=1
+#   use_hotspot_temp=1
+#   safety_all_sensors=0
+#   power_limit=250
+#   power_limit_mode=monitor
+#   persistence=1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Migration from v1.7 / rollback
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A v1.7 file with only the old keys is still valid: every new key has a safe
+# default and there are no silent semantic changes. In particular,
+# power_limit>0 without power_limit_mode keeps 'enforce' (v1.7 behavior).
+# To adopt the v1.81 recommendation on Vast.ai, add:
+#   power_limit_mode=monitor
+#   sensor_interval_ms=2000
+#   sensor_timeout_ms=6000
+#   fan_update_interval_ms=2000
+#   fan_change_threshold=2
+#
+# The installer backs up the previous installation under /var/backups and
+# saves an existing configuration as ~/set-fan-config.bak-v1.81-<timestamp>.
+# To roll back to v1.7:
+#   1. sudo systemctl stop set-fan-curve
+#   2. restore the saved config file
+#   3. install the gpu-fan-curve-v1.7.tar.gz asset and run its install.sh
+#   4. sudo systemctl start set-fan-curve
+# The v1.7 and v1.81 releases are independent; installing v1.7 does not
+# require removing the v1.81 binaries first (install.sh overwrites them).

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.81 (experimental)
+
+- Corrige identificación de procesos en `vergpu`: usa nombre de proceso NVML (`python`, aplicaciones, etc.).
+- Si NVML no devuelve nombre, intenta recuperarlo desde `/proc/<PID>/comm`.
+- Mantiene PID, memoria GPU y tipo de proceso.
+- Pendiente validación con GPU NVIDIA real.
+
 ## v1.9 (experimental)
 
 - `vergpu` consulta y actualiza procesos NVML al final de cada GPU.
