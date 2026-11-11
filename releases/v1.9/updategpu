@@ -1,0 +1,64 @@
+#!/bin/bash
+# updategpu — actualiza GPU Fan Curve Controller desde GitHub
+# ─────────────────────────────────────────────────────────────────────────────
+# Uso:
+#   updategpu          descarga la última versión y ejecuta el instalador
+#   updategpu --check  solo muestra qué versión hay disponible
+#
+# Descarga el archivo de la rama main del repositorio público, busca la
+# carpeta releases/v* más reciente y ejecuta su install.sh. La configuración
+# ~/set-fan-config se conserva (el instalador es upgrade-safe).
+#
+# Requiere: curl, tar y conexión a Internet.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+REPO="todocryptomining-sudo/gpu-set-fan-power"
+BRANCH="main"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+say() { echo "[updategpu] $*"; }
+
+fail() {
+    echo "[updategpu] Error: $*" >&2
+    exit 1
+}
+
+command -v curl >/dev/null 2>&1 || fail "falta 'curl' (sudo apt install curl)"
+command -v tar  >/dev/null 2>&1 || fail "falta 'tar'"
+
+say "Buscando la última versión en GitHub..."
+URL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+
+if ! curl -fsSL "$URL" -o "$TMP/pkg.tar.gz"; then
+    fail "no se pudo descargar $URL"
+fi
+
+tar -xzf "$TMP/pkg.tar.gz" -C "$TMP" || fail "el archivo descargado no es válido"
+
+SRC="$TMP/${REPO##*/}-${BRANCH}"
+[[ -d "$SRC/releases" ]] || fail "el repositorio no contiene releases/"
+
+LATEST="$(find "$SRC/releases" -maxdepth 1 -type d -name 'v*' | sort -V | tail -n 1)"
+[[ -n "$LATEST" ]] || fail "no se encontró ninguna versión en releases/"
+[[ -f "$LATEST/install.sh" ]] || fail "la versión descargada no tiene install.sh"
+
+VERSION="$(basename "$LATEST")"
+say "Versión disponible: $VERSION"
+
+if [[ "${1:-}" == "--check" ]]; then
+    say "Para instalar: sudo updategpu"
+    exit 0
+fi
+
+say "Instalando $VERSION (se conserva ~/set-fan-config)..."
+cd "$LATEST"
+
+if [[ "$(id -u)" -eq 0 ]]; then
+    bash ./install.sh
+else
+    sudo bash ./install.sh
+fi
+
+say "Actualización terminada. Comprueba con: gpuhelp"

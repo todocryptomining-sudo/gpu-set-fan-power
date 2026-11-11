@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.9 (experimental)
+
+- `vergpu` consulta y actualiza procesos NVML al final de cada GPU.
+- Muestra PID, memoria GPU, tipo (`C` compute / `G` graphics) y nombre.
+- Indica sin procesos visibles o consulta no disponible por driver/permisos.
+- `p` y `--no-processes` conservan su función; control de ventiladores sin cambios.
+- Pendiente validación en hardware NVIDIA real.
+
 ## v1.8 (en desarrollo)
 
 - Endurecimiento de lectura PCI/MMIO: tabla explícita por device ID, vendor NVIDIA, BDF válido, BAR0 completo, offsets dentro de rango, aritmética de 64 bits y mapeos solo lectura.
