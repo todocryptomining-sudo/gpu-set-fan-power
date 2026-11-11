@@ -13,7 +13,8 @@ Control de ventiladores para GPUs NVIDIA en Linux con **lectura directa de la te
 - **`max_speed`**: limita la velocidad normal de los ventiladores. El bloqueo crítico lo ignora y fuerza 100 %.
 - **Estado por ventilador**: Fan 0, Fan 1, … se leen y escriben por separado; se comprueba cada retorno NVML.
 - **Alerta de ventilador a 0 %**: avisa si un ventilador se queda parado mientras otro funciona.
-- **Bloqueo crítico con latch**: al alcanzar `critical_temp` fuerza 100 % y no baja hasta 5 °C por debajo. Es independiente de `max_temp`.
+- **Bloqueo crítico con latch**: al alcanzar `critical_temp` (comparación `>=`) fuerza 100 % y no baja hasta 5 °C por debajo. Es independiente de `max_temp` y admite hasta 110 °C para hotspots GDDR6X.
+- **Validación de configuración**: `set_fan_curve --check-config` detecta typos, claves desconocidas, valores vacíos, no numéricos y fuera de rango. `restartgpu` y `editargpu` validan antes de aplicar.
 - **Dominancia de power limit**: reafirma el límite cada 10 s.
 - **Política NVML manual**: se fija y reafirma cada 60 s; se restaura `AUTO` al detener el servicio.
 - **Persistence mode** opcional.
@@ -58,7 +59,7 @@ ls -l /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
 ```bash
 curl -fsSL https://github.com/todocryptomining-sudo/gpu-set-fan-power/archive/refs/heads/main.tar.gz -o /tmp/gpu-fan.tar.gz
 tar -xzf /tmp/gpu-fan.tar.gz -C /tmp
-cd /tmp/gpu-set-fan-power-main/releases/v1.6
+cd /tmp/gpu-set-fan-power-main/releases/v1.7
 chmod +x install.sh uninstall.sh editargpu restartgpu gpustatus gpusave setfan gpuhelp updategpu
 sudo ./install.sh
 ```
@@ -69,7 +70,7 @@ También puedes clonar el repositorio:
 
 ```bash
 git clone https://github.com/todocryptomining-sudo/gpu-set-fan-power.git
-cd gpu-set-fan-power/releases/v1.6
+cd gpu-set-fan-power/releases/v1.7
 sudo ./install.sh
 ```
 
@@ -86,8 +87,9 @@ sudo ./install.sh
 | `setfan max` | Fija los ventiladores al 100 %. |
 | `setfan auto` | Cancela la prueba y vuelve a la curva. |
 | `setfan status` | Muestra la prueba activa y las velocidades actuales. |
-| `editargpu` | Edita `~/set-fan-config`. |
-| `restartgpu` | Reinicia el servicio y aplica los cambios. |
+| `editargpu` | Edita `~/set-fan-config`, muestra el diff, valida y confirma antes de reiniciar. |
+| `restartgpu` | Valida la configuración y reinicia; no aplica archivos con errores. |
+| `set_fan_curve --check-config` | Comprueba la configuración sin root y sin tocar el servicio. |
 | `gpusave [nombre]` | Guarda una copia de la configuración. |
 | `gpuhelp` | Lista todos los comandos. |
 | `sudo updategpu` | Actualiza desde GitHub conservando la configuración. |
@@ -128,9 +130,9 @@ persistence=1
 | `max_temp` | Temperatura objetivo de la curva (50-100 °C). La curva llega a `max_speed` aquí. |
 | `min_speed` | Suelo de velocidad (0-80 %). Se aplica después de la curva. |
 | `max_speed` | Tope normal (20-100 %). El bloqueo crítico lo ignora. |
-| `critical_temp` | Umbral del bloqueo crítico (50-100 °C). Puede ser menor que `max_temp`. |
+| `critical_temp` | Umbral del bloqueo crítico (50-110 °C). Puede ser menor o mayor que `max_temp`. |
 | `use_vram_temp` | Incluye la VRAM leída por PCI en el cálculo de la curva. |
-| `use_hotspot_temp` | Incluye el hotspot leído por PCI en la curva. |
+| `use_hotspot_temp` | Incluye el hotspot leído por PCI en la curva (y por tanto en el bloqueo si `safety_all_sensors=0`). |
 | `safety_all_sensors` | `0` = el bloqueo usa los mismos sensores que la curva; `1` = core + VRAM + hotspot. |
 | `power_limit` | Límite de potencia en vatios; `0` = no tocarlo. |
 | `persistence` | `1` activa persistence mode. |
@@ -153,6 +155,28 @@ Ejemplo con `max_temp=100`, `min_speed=25`, `max_speed=100`, `critical_temp=95`:
 60 °C o menos → 25 %
 84 °C         → 60 %
 95 °C         → 100 % (bloqueo crítico)
+```
+
+### Hotspot a 105 °C y bloqueo al 100 %
+
+El bloqueo dispara con `>= critical_temp`. El hotspot solo puede dispararlo si
+forma parte de los sensores del bloqueo:
+
+| `use_hotspot_temp` | `safety_all_sensors` | ¿El hotspot fuerza 100 %? |
+|---|---|---|
+| 0 | 0 | No |
+| 1 | 0 | Sí |
+| cualquiera | 1 | Sí |
+
+Para permitir picos normales de 105 °C: pon `use_hotspot_temp=0` y
+`safety_all_sensors=0`, o sube `critical_temp` a 106-110.
+
+### Validar y aplicar
+
+```bash
+set_fan_curve --check-config ~/set-fan-config   # no requiere root
+editargpu      # diff + validación + confirmación
+restartgpu     # valida y reinicia; aborta si hay errores
 ```
 
 Después de editar:
@@ -254,8 +278,8 @@ El daemon reintenta inicializar NVML durante 60 s si el driver aún no está lis
 ├── LICENSE
 ├── CHANGELOG.md
 └── releases/
-    └── v1.6/
-        ├── set_fan_curve.cpp    # daemon
+    └── v1.7/
+        ├── set_fan_curve.cpp    # daemon + validación
         ├── vergpu.cpp           # monitor
         ├── gpu_temps.c/.h       # lectura PCI + estado de fans
         ├── nvml_min.h           # declaraciones NVML mínimas

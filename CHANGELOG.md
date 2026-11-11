@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.7
+
+- **`critical_temp` hasta 110 °C** (antes 50-100). Permite picos normales de 100-105 °C en hotspots GDDR6X sin bloquear. El bloqueo sigue disparando con `>=`.
+- **Nuevo `set_fan_curve --check-config` / `--validate`**: revisa el archivo línea a línea.
+  - Claves desconocidas (typos), líneas sin `=`, claves o valores vacíos y valores no numéricos → error.
+  - Valores fuera de rango → error con el rango permitido.
+  - Claves duplicadas → aviso; se usa la última.
+  - Muestra los valores efectivos y los sensores exactos de la curva y del bloqueo crítico.
+  - No necesita root, no inicializa NVML y no toca el servicio. Devuelve 1 si hay errores.
+- **`restartgpu` valida antes de reiniciar**: si hay errores, no reinicia y el servicio conserva la configuración anterior.
+- **`editargpu` rediseñado**: copia temporal, editor, diff con el original, validación y bucle de re-edición. Solo pregunta si reiniciar cuando la configuración es válida; antes muestra las modificaciones.
+- **Diagnóstico de sensores**: el arranque y `--check-config` indican si el hotspot forma parte del bloqueo (`use_hotspot_temp` / `safety_all_sensors`).
+- **Config inválida en runtime**: el daemon sigue arrancando con valores seguros y registra los errores; los scripts impiden aplicarla.
+- **`gpuhelp`, `install.sh`, `uninstall.sh`, `setfan`, README y configuración de ejemplo** actualizados a v1.7.
+- Incluye todos los cambios de v1.6.
+
 ## v1.6
 
 - **Corregido `max_temp=100`**: el parser acepta 50-100 °C. Antes rechazaba 100 y usaba 85, lo que hacía que los ventiladores subieran a ~98 % a 84 °C.
